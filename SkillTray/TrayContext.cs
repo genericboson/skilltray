@@ -9,6 +9,7 @@ internal sealed class TrayContext : ApplicationContext
     private readonly Icon _icon;
     private readonly ToolStripMenuItem _folderItem;
     private readonly ToolStripMenuItem _startupItem;
+    private List<SkillInfo> _skills = [];
 
     public TrayContext()
     {
@@ -22,6 +23,7 @@ internal sealed class TrayContext : ApplicationContext
 
         var options = new ContextMenuStrip();
         options.Items.Add("스킬 목록 열기", null, (_, _) => ShowSkillMenu());
+        options.Items.Add("새로고침", null, (_, _) => ReloadSkills(notify: true));
         options.Items.Add(new ToolStripSeparator());
         options.Items.Add(_folderItem);
         options.Items.Add(_startupItem);
@@ -41,21 +43,31 @@ internal sealed class TrayContext : ApplicationContext
             if (e.Button == MouseButtons.Left)
                 ShowSkillMenu();
         };
+
+        ReloadSkills(notify: false);
     }
 
-    private void ShowSkillMenu()
+    private void ShowSkillMenu() => _menu.ShowAt(Cursor.Position, _skills);
+
+    /// <summary>디스크에서 스킬 목록을 다시 모은다. 실패하면 이전 목록을 그대로 둔다.</summary>
+    private void ReloadSkills(bool notify)
     {
-        List<SkillInfo> skills;
         try
         {
-            skills = SkillCatalog.Load(_settings.WorkingDirectory);
+            _skills = SkillCatalog.Load(_settings.WorkingDirectory);
         }
         catch (Exception ex)
         {
             _tray.ShowBalloonTip(5000, "SkillTray", "스킬 목록을 읽지 못했습니다: " + ex.Message, ToolTipIcon.Error);
             return;
         }
-        _menu.ShowAt(Cursor.Position, skills);
+
+        if (notify)
+        {
+            int system = _skills.Count(s => s.Category == SkillCategory.System);
+            int custom = _skills.Count - system;
+            _tray.ShowBalloonTip(3000, "SkillTray", $"스킬 목록을 새로고침했습니다. system {system}개, custom {custom}개", ToolTipIcon.Info);
+        }
     }
 
     private void RunSkill(SkillInfo skill)
@@ -88,6 +100,7 @@ internal sealed class TrayContext : ApplicationContext
             return;
         _settings.WorkingDirectory = dialog.SelectedPath;
         _settings.Save();
+        ReloadSkills(notify: true);
     }
 
     private void ToggleStartup()
