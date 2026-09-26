@@ -4,7 +4,7 @@ namespace SkillTray;
 internal sealed class TrayContext : ApplicationContext
 {
     private readonly NotifyIcon _tray;
-    private readonly SkillMenuForm _menu;
+    private readonly SkillMenu _menu;
     private readonly AppSettings _settings = AppSettings.Load();
     private readonly Icon _icon;
     private readonly ToolStripMenuItem _folderItem;
@@ -14,7 +14,7 @@ internal sealed class TrayContext : ApplicationContext
     {
         _icon = LoadIcon();
 
-        _menu = new SkillMenuForm();
+        _menu = new SkillMenu();
         _menu.SkillChosen += RunSkill;
 
         _folderItem = new ToolStripMenuItem("", null, (_, _) => ChooseWorkingDirectory());

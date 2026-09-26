@@ -7,24 +7,34 @@ namespace SkillTray;
 /// Claude Code에 등록된 스킬을 디스크에서 찾아 모은다.
 /// 찾는 위치: ~/.claude/skills, ~/.claude/commands, 작업 폴더의 .claude/skills·commands,
 /// 설치된 플러그인의 skills·commands, 그리고 CLI에 내장된 스킬.
+/// 내장·플러그인·설치형 프레임워크 스킬은 system, 나머지는 사용자가 만든 custom으로 분류한다.
 /// </summary>
 internal static class SkillCatalog
 {
     // Claude Code CLI에 번들된 스킬 (디스크에 파일이 없다)
     private static readonly SkillInfo[] BuiltInSkills =
     [
-        new("code-review", "현재 변경사항 코드 리뷰", "built-in"),
-        new("simplify", "변경된 코드의 재사용·단순화·효율 정리", "built-in"),
-        new("security-review", "현재 브랜치 변경사항 보안 리뷰", "built-in"),
-        new("init", "CLAUDE.md 초기화", "built-in"),
-        new("loop", "프롬프트를 주기적으로 반복 실행", "built-in"),
-        new("schedule", "예약 에이전트 생성·관리", "built-in"),
-        new("claude-api", "Claude API / Anthropic SDK 레퍼런스", "built-in"),
-        new("fewer-permission-prompts", "자주 쓰는 읽기 전용 명령 허용 목록 추가", "built-in"),
-        new("update-config", "settings.json 설정 변경", "built-in"),
-        new("keybindings-help", "키 바인딩 사용자 설정", "built-in"),
-        new("run", "프로젝트 앱 실행해서 확인", "built-in"),
+        BuiltIn("code-review", "현재 변경사항 코드 리뷰"),
+        BuiltIn("simplify", "변경된 코드의 재사용·단순화·효율 정리"),
+        BuiltIn("security-review", "현재 브랜치 변경사항 보안 리뷰"),
+        BuiltIn("init", "CLAUDE.md 초기화"),
+        BuiltIn("loop", "프롬프트를 주기적으로 반복 실행"),
+        BuiltIn("schedule", "예약 에이전트 생성·관리"),
+        BuiltIn("claude-api", "Claude API / Anthropic SDK 레퍼런스"),
+        BuiltIn("fewer-permission-prompts", "자주 쓰는 읽기 전용 명령 허용 목록 추가"),
+        BuiltIn("update-config", "settings.json 설정 변경"),
+        BuiltIn("keybindings-help", "키 바인딩 사용자 설정"),
+        BuiltIn("run", "프로젝트 앱 실행해서 확인"),
     ];
+
+    // 설치기가 ~/.claude/commands 아래에 넣는 프레임워크: (설치 표식 파일, commands 하위 폴더)
+    private static readonly (string MarkerFile, string CommandsFolder)[] InstalledFrameworks =
+    [
+        (".superclaude-metadata.json", "sc"),
+    ];
+
+    private static SkillInfo BuiltIn(string name, string description) =>
+        new(name, description, "built-in", SkillCategory.System);
 
     public static List<SkillInfo> Load(string? projectDirectory)
     {
@@ -34,20 +44,25 @@ internal static class SkillCatalog
         var found = new Dictionary<string, SkillInfo>(StringComparer.OrdinalIgnoreCase);
         void Add(SkillInfo skill) => found.TryAdd(skill.Name, skill);
 
+        var frameworkFolders = InstalledFrameworks
+            .Where(f => File.Exists(Path.Combine(claudeHome, f.MarkerFile)))
+            .Select(f => f.CommandsFolder)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         if (!string.IsNullOrWhiteSpace(projectDirectory))
         {
             var projectClaude = Path.Combine(projectDirectory, ".claude");
-            ScanSkillsDir(Path.Combine(projectClaude, "skills"), null, "project").ForEach(Add);
-            ScanCommandsDir(Path.Combine(projectClaude, "commands"), null, "project").ForEach(Add);
+            ScanSkillsDir(Path.Combine(projectClaude, "skills"), null, "project", SkillCategory.Custom).ForEach(Add);
+            ScanCommandsDir(Path.Combine(projectClaude, "commands"), null, "project", new HashSet<string>()).ForEach(Add);
         }
 
-        ScanSkillsDir(Path.Combine(claudeHome, "skills"), null, "user").ForEach(Add);
-        ScanCommandsDir(Path.Combine(claudeHome, "commands"), null, "user").ForEach(Add);
+        ScanSkillsDir(Path.Combine(claudeHome, "skills"), null, "user", SkillCategory.Custom).ForEach(Add);
+        ScanCommandsDir(Path.Combine(claudeHome, "commands"), null, "user", frameworkFolders).ForEach(Add);
 
         foreach (var (pluginName, installPath) in InstalledPlugins(claudeHome))
         {
-            ScanSkillsDir(Path.Combine(installPath, "skills"), pluginName, pluginName).ForEach(Add);
-            ScanCommandsDir(Path.Combine(installPath, "commands"), pluginName, pluginName).ForEach(Add);
+            ScanSkillsDir(Path.Combine(installPath, "skills"), pluginName, pluginName, SkillCategory.System).ForEach(Add);
+            ScanCommandsDir(Path.Combine(installPath, "commands"), pluginName, pluginName, null).ForEach(Add);
         }
 
         foreach (var skill in BuiltInSkills)
@@ -59,7 +74,7 @@ internal static class SkillCatalog
     }
 
     /// <summary>skills/&lt;이름&gt;/SKILL.md 형태.</summary>
-    private static List<SkillInfo> ScanSkillsDir(string dir, string? prefix, string source)
+    private static List<SkillInfo> ScanSkillsDir(string dir, string? prefix, string source, SkillCategory category)
     {
         var result = new List<SkillInfo>();
         if (!Directory.Exists(dir))
@@ -73,13 +88,16 @@ internal static class SkillCatalog
 
             var meta = ReadFrontmatter(file);
             var name = meta.GetValueOrDefault("name") is { Length: > 0 } n ? n : Path.GetFileName(skillDir);
-            result.Add(new SkillInfo(Qualify(prefix, name), meta.GetValueOrDefault("description") ?? "", source));
+            result.Add(new SkillInfo(Qualify(prefix, name), meta.GetValueOrDefault("description") ?? "", source, category));
         }
         return result;
     }
 
-    /// <summary>commands/**/&lt;이름&gt;.md 형태. 하위 폴더는 콜론으로 이어 붙는다 (sc/analyze.md → sc:analyze).</summary>
-    private static List<SkillInfo> ScanCommandsDir(string dir, string? prefix, string source)
+    /// <summary>
+    /// commands/**/&lt;이름&gt;.md 형태. 하위 폴더는 콜론으로 이어 붙는다 (sc/analyze.md → sc:analyze).
+    /// systemFolders가 null이면 전부 system, 아니면 그 하위 폴더에 든 것만 system이고 나머지는 custom.
+    /// </summary>
+    private static List<SkillInfo> ScanCommandsDir(string dir, string? prefix, string source, IReadOnlySet<string>? systemFolders)
     {
         var result = new List<SkillInfo>();
         if (!Directory.Exists(dir))
@@ -88,11 +106,14 @@ internal static class SkillCatalog
         foreach (var file in Directory.EnumerateFiles(dir, "*.md", SearchOption.AllDirectories))
         {
             var relative = Path.GetRelativePath(dir, file);
-            var name = Path.ChangeExtension(relative, null)
-                .Replace(Path.DirectorySeparatorChar, ':')
-                .Replace(Path.AltDirectorySeparatorChar, ':');
+            var parts = Path.ChangeExtension(relative, null)
+                .Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]);
+            var name = string.Join(':', parts);
+            var category = systemFolders is null || (parts.Length > 1 && systemFolders.Contains(parts[0]))
+                ? SkillCategory.System
+                : SkillCategory.Custom;
             var meta = ReadFrontmatter(file);
-            result.Add(new SkillInfo(Qualify(prefix, name), meta.GetValueOrDefault("description") ?? "", source));
+            result.Add(new SkillInfo(Qualify(prefix, name), meta.GetValueOrDefault("description") ?? "", source, category));
         }
         return result;
     }
