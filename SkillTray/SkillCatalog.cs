@@ -49,9 +49,13 @@ internal static class SkillCatalog
             .Select(f => f.CommandsFolder)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        if (!string.IsNullOrWhiteSpace(projectDirectory))
+        // 작업 폴더가 홈 폴더면 프로젝트 .claude가 ~/.claude 자체이므로 아래 사용자 스캔에 맡긴다
+        var projectClaude = string.IsNullOrWhiteSpace(projectDirectory)
+            ? null
+            : Path.GetFullPath(Path.Combine(projectDirectory, ".claude"));
+        if (projectClaude != null
+            && !string.Equals(projectClaude.TrimEnd('\\'), Path.GetFullPath(claudeHome).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
         {
-            var projectClaude = Path.Combine(projectDirectory, ".claude");
             ScanSkillsDir(Path.Combine(projectClaude, "skills"), null, "project", SkillCategory.Custom).ForEach(Add);
             ScanCommandsDir(Path.Combine(projectClaude, "commands"), null, "project", new HashSet<string>()).ForEach(Add);
         }
